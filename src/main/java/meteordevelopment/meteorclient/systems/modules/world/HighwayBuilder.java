@@ -254,9 +254,17 @@ public class HighwayBuilder extends Module {
 
     // Paving
 
-    public final Setting<List<Block>> blocksToPlace = sgPaving.add(new BlockListSetting.Builder()
-        .name("blocks-to-place")
-        .description("Blocks it is allowed to place.")
+    public final Setting<List<Block>> floorBlocks = sgPaving.add(new BlockListSetting.Builder()
+        .name("floor-blocks")
+        .description("Blocks it is allowed to place on the highway floor.")
+        .defaultValue(Blocks.OBSIDIAN)
+        .filter(block -> Block.isShapeFullCube(block.getDefaultState().getCollisionShape(EmptyBlockView.INSTANCE, BlockPos.ORIGIN)))
+        .build()
+    );
+
+    public final Setting<List<Block>> railBlocks = sgPaving.add(new BlockListSetting.Builder()
+        .name("rail-blocks")
+        .description("Blocks it is allowed to place for railings.")
         .defaultValue(Blocks.OBSIDIAN)
         .filter(block -> Block.isShapeFullCube(block.getDefaultState().getCollisionShape(EmptyBlockView.INSTANCE, BlockPos.ORIGIN)))
         .build()
@@ -602,11 +610,11 @@ public class HighwayBuilder extends Module {
         if (suspended || blockPosProvider == null) return; // prevents a fascinating crash
 
         if (renderMine.get()) {
-            render(event, blockPosProvider.getFront(), mBlockPos -> canMine(mBlockPos, true), true);
-            if (floor.get() == Floor.Replace) render(event, blockPosProvider.getFloor(), mBlockPos -> canMine(mBlockPos, false), true);
-            if (railings.get()) render(event, blockPosProvider.getRailings(0), mBlockPos -> canMine(mBlockPos, false), true);
-            if (mineAboveRailings.get()) render(event, blockPosProvider.getRailings(1), mBlockPos -> canMine(mBlockPos, true), true);
-            if (state == State.MineEChestBlockade) render(event, blockPosProvider.getBlockade(true, blockadeType.get()), mBlockPos -> canMine(mBlockPos, true), true);
+            render(event, blockPosProvider.getFront(), mBlockPos -> canMine(mBlockPos, true, floorBlocks.get()), true);
+            if (floor.get() == Floor.Replace) render(event, blockPosProvider.getFloor(), mBlockPos -> canMine(mBlockPos, false, floorBlocks.get()), true);
+            if (railings.get()) render(event, blockPosProvider.getRailings(0), mBlockPos -> canMine(mBlockPos, false, railBlocks.get()), true);
+            if (mineAboveRailings.get()) render(event, blockPosProvider.getRailings(1), mBlockPos -> canMine(mBlockPos, true, railBlocks.get()), true);
+            if (state == State.MineEChestBlockade) render(event, blockPosProvider.getBlockade(true, blockadeType.get()), mBlockPos -> canMine(mBlockPos, true, floorBlocks.get()), true);
         }
 
         if (renderPlace.get()) {
@@ -620,7 +628,7 @@ public class HighwayBuilder extends Module {
                     render(event, blockPosProvider.getRailings(-1), mBlockPos -> {
                         boolean valid = false;
                         for (MBlockPos pos : blockPosProvider.getRailings(0)) {
-                            if (!blocksToPlace.get().contains(pos.getState().getBlock()) && pos.add(0, -1, 0).equals(mBlockPos)) {
+                            if (!railBlocks.get().contains(pos.getState().getBlock()) && pos.add(0, -1, 0).equals(mBlockPos)) {
                                 valid = true;
                                 break;
                             }
@@ -701,9 +709,13 @@ public class HighwayBuilder extends Module {
         };
     }
 
-    private boolean canMine(MBlockPos pos, boolean mineBlocksToPlace) {
+    private boolean isAllowedBlock(Block block) {
+        return floorBlocks.get().contains(block) || railBlocks.get().contains(block);
+    }
+
+    private boolean canMine(MBlockPos pos, boolean mineBlocksToPlace, List<Block> blocks) {
         BlockState state = pos.getState();
-        return BlockUtils.canBreak(pos.getBlockPos(), state) && (mineBlocksToPlace || !blocksToPlace.get().contains(state.getBlock()));
+        return BlockUtils.canBreak(pos.getBlockPos(), state) && (mineBlocksToPlace || !blocks.contains(state.getBlock()));
     }
 
     private boolean canPlace(MBlockPos pos, boolean liquids) {
@@ -836,10 +848,10 @@ public class HighwayBuilder extends Module {
             private void checkTasks(HighwayBuilder b) {
                 if (b.destroyCrystalTraps.get() && isCrystalTrap(b)) b.setState(DefuseCrystalTraps); // Destroy crystal traps
                 else if (needsToPlace(b, b.blockPosProvider.getLiquids(), true)) b.setState(FillLiquids); // Fill Liquids
-                else if (needsToMine(b, b.blockPosProvider.getFront(), true)) b.setState(MineFront); // Mine Front
-                else if (b.floor.get() == Floor.Replace && needsToMine(b, b.blockPosProvider.getFloor(), false)) b.setState(MineFloor); // Mine Floor
-                else if (b.railings.get() && needsToMine(b, b.blockPosProvider.getRailings(0), false)) b.setState(MineRailings); // Mine Railings
-                else if (b.mineAboveRailings.get() && needsToMine(b, b.blockPosProvider.getRailings(1), true)) b.setState(MineAboveRailings); // Mine above railings
+                else if (needsToMine(b, b.blockPosProvider.getFront(), true, b.floorBlocks.get())) b.setState(MineFront); // Mine Front
+                else if (b.floor.get() == Floor.Replace && needsToMine(b, b.blockPosProvider.getFloor(), false, b.floorBlocks.get())) b.setState(MineFloor); // Mine Floor
+                else if (b.railings.get() && needsToMine(b, b.blockPosProvider.getRailings(0), false, b.railBlocks.get())) b.setState(MineRailings); // Mine Railings
+                else if (b.mineAboveRailings.get() && needsToMine(b, b.blockPosProvider.getRailings(1), true, b.railBlocks.get())) b.setState(MineAboveRailings); // Mine above railings
                 else if (b.railings.get() && needsToPlace(b, b.blockPosProvider.getRailings(0), false)) {
                     if (b.cornerBlock.get() && needsToPlace(b, b.blockPosProvider.getRailings(-1), false)) b.setState(PlaceCornerBlock); // Place corner support block
                     else b.setState(PlaceRailings); // Place Railings
@@ -847,9 +859,9 @@ public class HighwayBuilder extends Module {
                 else if (needsToPlace(b, b.blockPosProvider.getFloor(), false)) b.setState(PlaceFloor); // Place Floor
             }
 
-            private boolean needsToMine(HighwayBuilder b, MBPIterator it, boolean mineBlocksToPlace) {
+            private boolean needsToMine(HighwayBuilder b, MBPIterator it, boolean mineBlocksToPlace, List<Block> blocks) {
                 for (MBlockPos pos : it) {
-                    if (b.canMine(pos, mineBlocksToPlace)) return true;
+                    if (b.canMine(pos, mineBlocksToPlace, blocks)) return true;
                 }
 
                 return false;
@@ -923,7 +935,7 @@ public class HighwayBuilder extends Module {
                 int slot = -1;
                 if (pos.getY() == startPos.down().getY()) {
                     // we would prefer the block flush with the highway to be an appropriate placement block, not trash
-                    slot = findAndMoveToHotbar(b, itemStack -> itemStack.getItem() instanceof BlockItem blockItem && b.blocksToPlace.get().contains(blockItem.getBlock()));
+                    slot = findAndMoveToHotbar(b, itemStack -> itemStack.getItem() instanceof BlockItem blockItem && b.floorBlocks.get().contains(blockItem.getBlock()));
                 }
 
                 if (slot == -1) {
@@ -947,7 +959,7 @@ public class HighwayBuilder extends Module {
                 // next we prioritise placement blocks
                 if (slot == -1) slot = findAndMoveToHotbar(b, itemStack -> {
                     if (!(itemStack.getItem() instanceof BlockItem bi)) return false;
-                    return b.blocksToPlace.get().contains(bi.getBlock());
+                    return b.floorBlocks.get().contains(bi.getBlock());
                 });
 
                 // falling is an emergency; in this case only, we allow access to any whole block in your inventory
@@ -965,7 +977,7 @@ public class HighwayBuilder extends Module {
         FillLiquids {
             @Override
             protected void tick(HighwayBuilder b) {
-                int slot = findBlocksToPlacePrioritizeTrash(b);
+                int slot = findBlocksToPlacePrioritizeTrash(b, b.floorBlocks.get());
                 if (slot == -1) return;
 
                 place(b, new MBPIteratorFilter(b.blockPosProvider.getLiquids(), pos -> !pos.getState().getFluidState().isEmpty()), slot, Forward);
@@ -975,55 +987,55 @@ public class HighwayBuilder extends Module {
         MineFront {
             @Override
             protected void start(HighwayBuilder b) {
-                mine(b, b.blockPosProvider.getFront(), true, Forward, this);
+                mine(b, b.blockPosProvider.getFront(), true, Forward, this, b.floorBlocks.get());
             }
 
             @Override
             protected void tick(HighwayBuilder b) {
-                mine(b, b.blockPosProvider.getFront(), true, Forward, this);
+                mine(b, b.blockPosProvider.getFront(), true, Forward, this, b.floorBlocks.get());
             }
         },
 
         MineFloor {
             @Override
             protected void start(HighwayBuilder b) {
-                mine(b, b.blockPosProvider.getFloor(), false, Forward, this);
+                mine(b, b.blockPosProvider.getFloor(), false, Forward, this, b.floorBlocks.get());
             }
 
             @Override
             protected void tick(HighwayBuilder b) {
-                mine(b, b.blockPosProvider.getFloor(), false, Forward, this);
+                mine(b, b.blockPosProvider.getFloor(), false, Forward, this, b.floorBlocks.get());
             }
         },
 
         MineRailings {
             @Override
             protected void start(HighwayBuilder b) {
-                mine(b, b.blockPosProvider.getRailings(0), false, Forward, this);
+                mine(b, b.blockPosProvider.getRailings(0), false, Forward, this, b.railBlocks.get());
             }
 
             @Override
             protected void tick(HighwayBuilder b) {
-                mine(b, b.blockPosProvider.getRailings(0), false, Forward, this);
+                mine(b, b.blockPosProvider.getRailings(0), false, Forward, this, b.railBlocks.get());
             }
         },
 
         MineAboveRailings {
             @Override
             protected void start(HighwayBuilder b) {
-                mine(b, b.blockPosProvider.getRailings(1), true, Forward, this);
+                mine(b, b.blockPosProvider.getRailings(1), true, Forward, this, b.railBlocks.get());
             }
 
             @Override
             protected void tick(HighwayBuilder b) {
-                mine(b, b.blockPosProvider.getRailings(1), true, Forward, this);
+                mine(b, b.blockPosProvider.getRailings(1), true, Forward, this, b.railBlocks.get());
             }
         },
 
         PlaceCornerBlock {
             @Override
             protected void start(HighwayBuilder b) {
-                int slot = findBlocksToPlacePrioritizeTrash(b);
+                int slot = findBlocksToPlacePrioritizeTrash(b, b.railBlocks.get());
                 if (slot == -1) return;
 
                 place(b, b.blockPosProvider.getRailings(-1), slot, Forward);
@@ -1031,7 +1043,7 @@ public class HighwayBuilder extends Module {
 
             @Override
             protected void tick(HighwayBuilder b) {
-                int slot = findBlocksToPlacePrioritizeTrash(b);
+                int slot = findBlocksToPlacePrioritizeTrash(b, b.railBlocks.get());
                 if (slot == -1) return;
 
                 place(b, b.blockPosProvider.getRailings(-1), slot, Forward);
@@ -1041,7 +1053,7 @@ public class HighwayBuilder extends Module {
         PlaceRailings {
             @Override
             protected void start(HighwayBuilder b) {
-                int slot = findBlocksToPlace(b);
+                int slot = findBlocksToPlace(b, b.railBlocks.get());
                 if (slot == -1) return;
 
                 place(b, b.blockPosProvider.getRailings(0), slot, Forward);
@@ -1049,7 +1061,7 @@ public class HighwayBuilder extends Module {
 
             @Override
             protected void tick(HighwayBuilder b) {
-                int slot = findBlocksToPlace(b);
+                int slot = findBlocksToPlace(b, b.railBlocks.get());
                 if (slot == -1) return;
 
                 place(b, b.blockPosProvider.getRailings(0), slot, Forward);
@@ -1059,7 +1071,7 @@ public class HighwayBuilder extends Module {
         PlaceFloor {
             @Override
             protected void start(HighwayBuilder b) {
-                int slot = findBlocksToPlace(b);
+                int slot = findBlocksToPlace(b, b.floorBlocks.get());
                 if (slot == -1) return;
 
                 place(b, b.blockPosProvider.getFloor(), slot, Forward);
@@ -1067,7 +1079,7 @@ public class HighwayBuilder extends Module {
 
             @Override
             protected void tick(HighwayBuilder b) {
-                int slot = findBlocksToPlace(b);
+                int slot = findBlocksToPlace(b, b.floorBlocks.get());
                 if (slot == -1) return;
 
                 place(b, b.blockPosProvider.getFloor(), slot, Forward);
@@ -1138,7 +1150,7 @@ public class HighwayBuilder extends Module {
                         Utils.getItemsInContainerItem(itemStack, ITEMS);
                         boolean eject = true;
                         for (ItemStack stack : ITEMS) {
-                            if (stack.getItem() instanceof BlockItem bi && (b.blocksToPlace.get().contains(bi.getBlock()) || (b.blocksToPlace.get().contains(Blocks.OBSIDIAN) && bi == Items.ENDER_CHEST))) {
+                            if (stack.getItem() instanceof BlockItem bi && (b.isAllowedBlock(bi.getBlock()) || (b.isAllowedBlock(Blocks.OBSIDIAN) && bi == Items.ENDER_CHEST))) {
                                 eject = false;
                                 break;
                             }
@@ -1168,7 +1180,7 @@ public class HighwayBuilder extends Module {
         PlaceEChestBlockade {
             @Override
             protected void tick(HighwayBuilder b) {
-                int slot = findBlocksToPlacePrioritizeTrash(b);
+                int slot = findBlocksToPlacePrioritizeTrash(b, b.floorBlocks.get());
                 if (slot == -1) return;
 
                 place(b, b.blockPosProvider.getBlockade(false, b.blockadeType.get()), slot, MineEnderChests);
@@ -1178,7 +1190,7 @@ public class HighwayBuilder extends Module {
         MineEChestBlockade {
             @Override
             protected void tick(HighwayBuilder b) {
-                mine(b, b.blockPosProvider.getBlockade(true, b.blockadeType.get()), true, Center, Forward);
+                mine(b, b.blockPosProvider.getBlockade(true, b.blockadeType.get()), true, Center, Forward, b.floorBlocks.get());
             }
         },
 
@@ -1397,7 +1409,7 @@ public class HighwayBuilder extends Module {
                     if (EChestMemory.isKnown()) {
                         for (ItemStack stack : EChestMemory.ITEMS) {
                             if (b.restockTask.materials && stack.getItem() instanceof BlockItem bi) {
-                                if (b.blocksToPlace.get().contains(bi.getBlock()) || (b.blocksToPlace.get().contains(Blocks.OBSIDIAN) && bi == Items.ENDER_CHEST)) {
+                                if (b.isAllowedBlock(bi.getBlock()) || (b.isAllowedBlock(Blocks.OBSIDIAN) && bi == Items.ENDER_CHEST)) {
                                     stop = false;
                                     break;
                                 }
@@ -1424,7 +1436,7 @@ public class HighwayBuilder extends Module {
                 // by this point we have searched shulkers and your ender chest, and no more items could be found to pull from
                 if (slot == -1) {
                     boolean restockOccurred = (
-                        (b.restockTask.materials && (hasItem(b, stack -> stack.getItem() instanceof BlockItem bi && b.blocksToPlace.get().contains(bi.getBlock())) || b.blocksToPlace.get().contains(Blocks.OBSIDIAN) && countItem(b, itemStack -> itemStack.getItem() == Items.ENDER_CHEST) > b.saveEchests.get())) ||
+                        (b.restockTask.materials && (hasItem(b, stack -> stack.getItem() instanceof BlockItem bi && b.isAllowedBlock(bi.getBlock())) || b.isAllowedBlock(Blocks.OBSIDIAN) && countItem(b, itemStack -> itemStack.getItem() == Items.ENDER_CHEST) > b.saveEchests.get())) ||
                         (b.restockTask.pickaxes && countItem(b, itemStack -> itemStack.isIn(ItemTags.PICKAXES)) > b.savePickaxes.get()) ||
                         (b.restockTask.food && hasItem(b, itemStack -> itemStack.contains(DataComponentTypes.FOOD) && !Modules.get().get(AutoEat.class).blacklist.get().contains(itemStack.getItem())))
                     );
@@ -1473,7 +1485,7 @@ public class HighwayBuilder extends Module {
                 if (indicateStopping && !breakContainer) {
                     if (stopTimer > 0) stopTimer--;
                     else {
-                        if (b.lastState == PlaceShulkerBlockade) {// && !(b.blocksToPlace.get().contains(Blocks.OBSIDIAN) && countItem(b, stack -> stack.getItem() == Items.ENDER_CHEST) > b.saveEchests.get() && !hasItem(b, stack -> stack.getItem() == Items.OBSIDIAN))) {
+                        if (b.lastState == PlaceShulkerBlockade) {
                             b.setState(MineShulkerBlockade);
                         } else {
                             b.setState(ThrowOutTrash, Forward);
@@ -1497,8 +1509,8 @@ public class HighwayBuilder extends Module {
                 // calculate the amount of materials we have already pulled
                 int slotsPulled = 0;
                 if (b.restockTask.materials) {
-                    slotsPulled += countSlots(b, itemStack -> itemStack.getItem() instanceof BlockItem bi && b.blocksToPlace.get().contains(bi.getBlock()));
-                    if (b.blocksToPlace.get().contains(Blocks.OBSIDIAN)) slotsPulled += ((countItem(b, itemStack -> itemStack.getItem() == Items.ENDER_CHEST) - b.saveEchests.get()) * 8) / 64;
+                    slotsPulled += countSlots(b, itemStack -> itemStack.getItem() instanceof BlockItem bi && b.isAllowedBlock(bi.getBlock()));
+                    if (b.isAllowedBlock(Blocks.OBSIDIAN)) slotsPulled += ((countItem(b, itemStack -> itemStack.getItem() == Items.ENDER_CHEST) - b.saveEchests.get()) * 8) / 64;
                 }
                 if (b.restockTask.pickaxes) slotsPulled += countSlots(b, itemStack -> itemStack.isIn(ItemTags.PICKAXES)) - b.savePickaxes.get();
                 if (b.restockTask.food) slotsPulled += countSlots(b, itemStack -> itemStack.contains(DataComponentTypes.FOOD) && !Modules.get().get(AutoEat.class).blacklist.get().contains(itemStack.getItem()));
@@ -1606,10 +1618,10 @@ public class HighwayBuilder extends Module {
             private boolean restockItems(HighwayBuilder b, Inventory inv) {
                 if (b.restockTask.materials) {
                     // take raw material
-                    if (grabFromInventory(inv, itemStack -> itemStack.getItem() instanceof BlockItem bi && b.blocksToPlace.get().contains(bi.getBlock()))) return true;
+                    if (grabFromInventory(inv, itemStack -> itemStack.getItem() instanceof BlockItem bi && b.isAllowedBlock(bi.getBlock()))) return true;
 
                     // prefer taking raw material before echests
-                    if (b.blocksToPlace.get().contains(Blocks.OBSIDIAN)) {
+                    if (b.isAllowedBlock(Blocks.OBSIDIAN)) {
                         if (grabFromInventory(inv, itemStack -> itemStack.getItem() == Items.ENDER_CHEST)) return true;
                     }
                 }
@@ -1642,7 +1654,7 @@ public class HighwayBuilder extends Module {
 
                     for (ItemStack stack : ITEMS) {
                         if (b.restockTask.materials && stack.getItem() instanceof BlockItem bi) {
-                            if (b.blocksToPlace.get().contains(bi.getBlock()) || (b.blocksToPlace.get().contains(Blocks.OBSIDIAN) && bi == Items.ENDER_CHEST)) return true;
+                            if (b.isAllowedBlock(bi.getBlock()) || (b.isAllowedBlock(Blocks.OBSIDIAN) && bi == Items.ENDER_CHEST)) return true;
                         }
                         if (b.restockTask.pickaxes && stack.isIn(ItemTags.PICKAXES)) return true;
                         if (b.restockTask.food && stack.contains(DataComponentTypes.FOOD) && !Modules.get().get(AutoEat.class).blacklist.get().contains(stack.getItem())) return true;
@@ -1687,7 +1699,7 @@ public class HighwayBuilder extends Module {
         PlaceShulkerBlockade {
             @Override
             protected void tick(HighwayBuilder b) {
-                int slot = findBlocksToPlacePrioritizeTrash(b);
+                int slot = findBlocksToPlacePrioritizeTrash(b, b.floorBlocks.get());
                 if (slot == -1) return;
 
                 place(b, b.blockPosProvider.getBlockade(false, BlockadeType.Shulker), slot, Restock);
@@ -1712,7 +1724,7 @@ public class HighwayBuilder extends Module {
                 if (!stopTimerEnabled) {
                     // mining b.blockadeType instead of BlockadeType.Shulker is the fastest fix to the module leaving
                     // some blocks behind if you start a pickaxe restock task while mining echests
-                    mine(b, b.blockPosProvider.getBlockade(true, b.blockadeType.get()), true, this, this);
+                    mine(b, b.blockPosProvider.getBlockade(true, b.blockadeType.get()), true, this, this, b.floorBlocks.get());
                 }
                 else {
                     stopTimer--;
@@ -1848,7 +1860,7 @@ public class HighwayBuilder extends Module {
 
         protected abstract void tick(HighwayBuilder b);
 
-        protected void mine(HighwayBuilder b, MBPIterator it, boolean mineBlocksToPlace, State nextState, State lastState) {
+        protected void mine(HighwayBuilder b, MBPIterator it, boolean mineBlocksToPlace, State nextState, State lastState, List<Block> blocks) {
             boolean breaking = false;
             boolean finishedBreaking = false; // if you can multi break this lets you mine blocks between tasks in a single tick
 
@@ -1863,7 +1875,7 @@ public class HighwayBuilder extends Module {
                     // only want to double mine blocks that we can mine, that are not instamined, and we are not already mining
                     if (
                         BlockUtils.canBreak(pos.getBlockPos(), pos.getState())
-                        && (mineBlocksToPlace || !b.blocksToPlace.get().contains(pos.getState().getBlock()))
+                        && (mineBlocksToPlace || !blocks.contains(pos.getState().getBlock()))
                         && !BlockUtils.canInstaBreak(pos.getBlockPos()) && (!Modules.get().get(SpeedMine.class).instamine() || pos.getState().calcBlockBreakingDelta(b.mc.player, b.mc.world, pos.getBlockPos()) <= 0.5)
                         && (b.normalMining == null || !pos.getBlockPos().equals(b.normalMining.blockPos))
                         && (b.packetMining == null || !pos.getBlockPos().equals(b.packetMining.blockPos))
@@ -1900,7 +1912,7 @@ public class HighwayBuilder extends Module {
                 if (b.breakTimer > 0) return;
 
                 BlockState state = pos.getState();
-                if (state.isAir() || (!mineBlocksToPlace && b.blocksToPlace.get().contains(state.getBlock()))) continue;
+                if (state.isAir() || (!mineBlocksToPlace && blocks.contains(state.getBlock()))) continue;
 
                 int slot = findAndMoveBestToolToHotbar(b, state, false);
                 if (slot == -1) return;
@@ -2015,7 +2027,7 @@ public class HighwayBuilder extends Module {
                 if (b.trashItems.get().contains(itemStack.getItem())) thrashSlot = i;
 
                 // Update tracked stats about slots that contain building blocks
-                if (itemStack.getItem() instanceof BlockItem blockItem && (b.blocksToPlace.get().contains(blockItem.getBlock()) || b.blocksToPlace.get().contains(Blocks.OBSIDIAN) && blockItem == Items.ENDER_CHEST)) {
+                if (itemStack.getItem() instanceof BlockItem blockItem && (b.isAllowedBlock(blockItem.getBlock()) || (b.isAllowedBlock(Blocks.OBSIDIAN) && blockItem == Items.ENDER_CHEST))) {
                     slotsWithBlocks++;
 
                     if (itemStack.getCount() < slotWithLeastBlocksCount) {
@@ -2130,12 +2142,12 @@ public class HighwayBuilder extends Module {
             return hotbarSlot;
         }
 
-        protected int findBlocksToPlace(HighwayBuilder b) {
+        protected int findBlocksToPlace(HighwayBuilder b, List<Block> blocks) {
             // find a block and move it to your hotbar
-            int slot = findAndMoveToHotbar(b, itemStack -> itemStack.getItem() instanceof BlockItem blockItem && b.blocksToPlace.get().contains(blockItem.getBlock()));
+            int slot = findAndMoveToHotbar(b, itemStack -> itemStack.getItem() instanceof BlockItem blockItem && blocks.contains(blockItem.getBlock()));
 
             if (slot == -1) {
-                if (b.mineEnderChests.get() && b.blocksToPlace.get().contains(Blocks.OBSIDIAN) && countItem(b, stack -> stack.getItem().equals(Items.ENDER_CHEST)) > b.saveEchests.get()) {
+                if (b.mineEnderChests.get() && blocks.contains(Blocks.OBSIDIAN) && countItem(b, stack -> stack.getItem().equals(Items.ENDER_CHEST)) > b.saveEchests.get()) {
                     // can grind echests for obsidian
                     b.setState(MineEnderChests);
                 }
@@ -2153,13 +2165,13 @@ public class HighwayBuilder extends Module {
             return slot;
         }
 
-        protected int findBlocksToPlacePrioritizeTrash(HighwayBuilder b) {
+        protected int findBlocksToPlacePrioritizeTrash(HighwayBuilder b, List<Block> blocks) {
             int slot = findAndMoveToHotbar(b, itemStack -> {
                 if (!(itemStack.getItem() instanceof BlockItem)) return false;
                 return b.trashItems.get().contains(itemStack.getItem());
             });
 
-            return slot != -1 ? slot : findBlocksToPlace(b);
+            return slot != -1 ? slot : findBlocksToPlace(b, blocks);
         }
     }
 
